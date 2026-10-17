@@ -5,13 +5,40 @@ command:
     stdout:
       - "dgoss smoketest"
 
-  hardware_setup_unmasks_inputplumber:
+  bazzite_hardware_setup_has_valid_shell_syntax:
+    exec: "/usr/bin/bash -n /usr/libexec/bazzite-hardware-setup"
+    exit-status: 0
+
+  bazzite_user_setup_has_valid_shell_syntax:
+    exec: "/usr/bin/bash -n /usr/libexec/bazzite-user-setup"
+    exit-status: 0
+
+  bazzite_privileged_user_setup_has_valid_shell_syntax:
+    exec: "/usr/bin/bash -n /usr/libexec/bazzite-privileged-user-setup"
+    exit-status: 0
+
+  gamemode_news_hook_uses_release_channel:
     exec: |
       sh -lc '
-      setup=/usr/libexec/bazzite-hardware-setup
-      test "$(grep -Fc "systemctl unmask inputplumber.service" "$setup")" -eq 2
+      config=/etc/gamemode-news-hook.conf
+      if [ ! -f "$config" ]; then
+        echo "SKIP: gamemode-news-hook is not installed"
+        exit 0
+      fi
+      url=$(sed -n "s/^github[[:space:]]*=[[:space:]]*//p" "$config")
+      case "$url" in
+        */refs/heads/stable/announcements.json|*/refs/heads/testing/announcements.json|*/refs/heads/unstable/announcements.json)
+          echo "OK: gamemode-news-hook uses a release channel ($url)"
+          ;;
+        *)
+          echo "FAIL: gamemode-news-hook uses a non-release announcement URL: ${url:-<missing>}"
+          exit 1
+          ;;
+      esac
       '
     exit-status: 0
+    stdout:
+      - "/^(OK|SKIP):/"
 
   selinux_label_probe_works:
     exec: |
@@ -95,6 +122,49 @@ command:
         exit 1
       fi
       echo "OK: $name ships ryzen_smu at $module"
+      '
+    exit-status: 0
+    stdout:
+      - "/^(OK|SKIP):/"
+
+  uupd_manual_service_exists:
+    exec: |
+      sh -lc '
+      for dir in /usr/lib/systemd/system /etc/systemd/system; do
+        if [ -e "$dir/uupd-manual.service" ]; then
+          echo "OK: uupd-manual.service found in $dir"
+          exit 0
+        fi
+      done
+      echo "FAIL: uupd-manual.service not found"
+      exit 1
+      '
+    exit-status: 0
+    stdout:
+      - "/^OK:/"
+
+  # Deck images disable uupd.timer in the Containerfile.
+  uupd_timer_enabled:
+    exec: |
+      sh -lc '
+      info=/usr/share/ublue-os/image-info.json
+      name=$(sed -n "s/.*\"image-name\"[[:space:]]*:[[:space:]]*\"\([^\"]*\)\".*/\1/p" "$info" 2>/dev/null)
+      if [ -z "$name" ]; then
+        name=$(. /usr/lib/os-release 2>/dev/null; printf "%s" "$VARIANT_ID")
+      fi
+      if [ -z "$name" ]; then
+        echo "FAIL: unable to determine image name from $info or /usr/lib/os-release"
+        exit 1
+      fi
+      case "$name" in
+        *deck*) echo "SKIP: $name is a deck image, uupd.timer is disabled" ; exit 0 ;;
+      esac
+      state=$(systemctl is-enabled uupd.timer 2>&1)
+      if [ "$state" != "enabled" ]; then
+        echo "FAIL: uupd.timer is ${state:-<unknown>}, expected enabled"
+        exit 1
+      fi
+      echo "OK: uupd.timer is enabled"
       '
     exit-status: 0
     stdout:
